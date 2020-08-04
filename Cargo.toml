@@ -1,0 +1,16 @@
+[package]
+name = "cfwallet"
+version = "0.1.0"
+authors = ["jrawsthorne"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bitcoin-wallet = { git="https://github.com/jrawsthorne/rust-wallet" }
+bitcoin = { git="https://github.com/jrawsthorne/rust-bitcoin" }
+log = "0.4"
+env_logger = "0.7"
+
+[dev-dependencies]
+bitcoin = { git="https://github.com/jrawsthorne/rust-bitcoin", features=["rand"] }
