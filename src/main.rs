@@ -21,7 +21,7 @@ use bitcoin_wallet::{
     account::{Account, AccountAddressType, MasterAccount},
     coins::Coins,
 };
-use log::{info, LevelFilter};
+use log::{info, trace, LevelFilter};
 use std::{
     collections::{HashMap, VecDeque},
     net::{SocketAddr, TcpStream},
@@ -237,7 +237,7 @@ fn main() {
                 let filter_tip = &filter_headers_store.tip;
 
                 // These connect at the start
-                assert_eq!(previous_filter, filter_tip.filter_hash);
+                assert_eq!(previous_filter, filter_tip.filter_header);
                 // connect to the end
                 assert_eq!(
                     &stop_hash,
@@ -252,15 +252,12 @@ fn main() {
 
                 // TODO: Need support for multiple peers to detect mismatch
 
-                let mut height = filter_tip.height + 1;
+                let mut prev = *filter_tip;
 
                 for filter_hash in filter_hashes {
+                    let height = prev.height + 1;
                     let header = headers_store.by_height(height).unwrap();
-                    let filter_header = FilterHeader {
-                        filter_hash,
-                        header_hash: header.hash,
-                        height: header.height,
-                    };
+                    let filter_header = FilterHeader::new(&prev, filter_hash, header.hash);
                     filter_headers_store.hash.insert(header.hash, filter_header);
                     let duplicate = filter_headers_store
                         .height
@@ -268,13 +265,12 @@ fn main() {
                         .is_some();
                     assert!(!duplicate);
                     filter_headers_store.tip = filter_header;
-                    height += 1;
-                    // info!("{:?}", filter_headers_store.tip);
+                    prev = filter_header;
                 }
 
                 let stop = headers_store.by_hash(&stop_hash).unwrap();
 
-                if height % 2000 == 0 || headers_store.synced() {
+                if filter_headers_store.tip.height % 2000 == 0 || headers_store.synced() {
                     info!(
                         "added filter header: height={}, hash={}",
                         stop.height, stop.hash
@@ -340,13 +336,20 @@ impl Peer {
         };
 
         msg.consensus_encode(&mut self.stream).unwrap();
+
+        trace!("sent {}", msg.cmd());
     }
 
     pub fn read(&mut self) -> NetworkMessage {
-        self.reader
+        let msg = self
+            .reader
             .read_next::<RawNetworkMessage>()
             .unwrap()
-            .payload
+            .payload;
+
+        trace!("received {}", msg.cmd());
+
+        msg
     }
 
     pub fn send_version(&mut self) {
@@ -393,7 +396,7 @@ impl FilterHeaderStore {
         let header = FilterHeader {
             header_hash: genesis.block_hash(),
             height: 0,
-            filter_hash: genesis_filter(&genesis).filter_id(&FilterHash::default()),
+            filter_header: genesis_filter(&genesis).filter_id(&FilterHash::default()),
         };
         let mut hash = HashMap::new();
         hash.insert(header.header_hash, header);
@@ -634,8 +637,25 @@ impl Header {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct FilterHeader {
     pub header_hash: BlockHash,
-    pub filter_hash: FilterHash,
+    pub filter_header: FilterHash,
     pub height: u32,
+}
+
+impl FilterHeader {
+    pub fn new(prev: &FilterHeader, filter_hash: FilterHash, header_hash: BlockHash) -> Self {
+        use bitcoin::hashes::Hash;
+
+        let mut header_data = [0u8; 64];
+        header_data[0..32].copy_from_slice(&filter_hash[..]);
+        header_data[32..64].copy_from_slice(&prev.filter_header[..]);
+        let filter_header = FilterHash::hash(&header_data);
+
+        Self {
+            filter_header,
+            header_hash,
+            height: prev.height + 1,
+        }
+    }
 }
 
 pub fn now() -> u32 {
