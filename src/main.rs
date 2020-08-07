@@ -23,10 +23,9 @@ use bitcoin_wallet::{
     coins::Coins,
 };
 use log::{info, trace, LevelFilter};
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::{
     collections::{HashMap, VecDeque},
-    net::TcpStream,
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     str::FromStr,
     time::SystemTime,
 };
@@ -170,7 +169,7 @@ fn main() {
     let mut headers_store = HeaderStore::new(network);
     let mut filter_headers_store = FilterHeaderStore::new(network);
     let extended_pubkeys = args
-        .get(0)
+        .get(if args.len() == 1 { 0 } else { 1 })
         .expect("enter comma separated (x/y/z)pubs")
         .split(",")
         .map(FromStr::from_str)
