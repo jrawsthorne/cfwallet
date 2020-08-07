@@ -1,3 +1,4 @@
+use bitcoin::network::constants::Network;
 use bitcoin::{
     blockdata::constants::genesis_block,
     network::{
@@ -15,20 +16,67 @@ use bitcoin::{
         bip32::{ChildNumber, ExtendedPubKey, ScriptType},
         uint::Uint256,
     },
-    Amount, Block, BlockHash, BlockHeader, FilterHash, Network,
+    Amount, Block, BlockHash, BlockHeader, FilterHash,
 };
 use bitcoin_wallet::{
     account::{Account, AccountAddressType, MasterAccount},
     coins::Coins,
 };
 use log::{info, trace, LevelFilter};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::{
     collections::{HashMap, VecDeque},
-    net::{SocketAddr, TcpStream},
+    net::TcpStream,
     str::FromStr,
     time::SystemTime,
 };
+// Murmel DNS seed - from https://github.com/rust-bitcoin/murmel/blob/master/src/dns.rs
+const MAIN_SEEDER: [&str; 5] = [
+    "seed.bitcoin.sipa.be",
+    "dnsseed.bluematt.me",
+    "dnsseed.bitcoin.dashjr.org",
+    "seed.bitcoinstats.com",
+    "seed.btc.petertodd.org",
+];
 
+const TEST_SEEDER: [&str; 4] = [
+    "testnet-seed.bitcoin.jonasschnelli.ch",
+    "seed.tbtc.petertodd.org",
+    "seed.testnet.bitcoin.sprovoost.nl",
+    "testnet-seed.bluematt.me",
+];
+
+pub fn dns_seed(network: Network) -> Vec<SocketAddr> {
+    let mut seeds = Vec::new();
+    if network == Network::Bitcoin {
+        info!("reaching out for DNS seed...");
+        for seedhost in MAIN_SEEDER.iter() {
+            if let Ok(lookup) = (*seedhost, 8333).to_socket_addrs() {
+                for host in lookup {
+                    seeds.push(host);
+                }
+            } else {
+                trace!("{} did not answer", seedhost);
+            }
+        }
+        info!("received {} DNS seeds", seeds.len());
+    }
+    if network == Network::Testnet {
+        info!("reaching out for DNS seed...");
+        for seedhost in TEST_SEEDER.iter() {
+            if let Ok(lookup) = (*seedhost, 18333).to_socket_addrs() {
+                for host in lookup {
+                    seeds.push(host);
+                }
+            } else {
+                trace!("{} did not answer", seedhost);
+            }
+        }
+        info!("received {} DNS seeds", seeds.len());
+    }
+    seeds
+}
+// EOF murmel
 fn create_master_account(extended_pubkeys: Vec<ExtendedPubKey>, network: Network) -> MasterAccount {
     let mut master_account =
         MasterAccount::watch_only(extended_pubkeys[0] /*doesn't effect watch only*/, 0);
@@ -94,17 +142,35 @@ fn main() {
         .init();
     let args: Vec<_> = std::env::args().skip(1).collect();
     let network = Network::Testnet;
-    let addr: SocketAddr = args
-        .get(0)
-        .expect("enter an IP address")
-        .parse()
-        .expect("invalid IP address");
-    let stream = TcpStream::connect(addr).expect("couldn't connect to peer");
-    let mut peer = Peer::new(stream, network);
+    let seeds = dns_seed(network);
+
+    let mut peer: Peer = if args.len() > 1 {
+        let addr: SocketAddr = args
+            .get(0)
+            .expect("enter an IP address")
+            .parse()
+            .expect("invalid IP address");
+        let stream = TcpStream::connect(addr).expect("Unable to connect to supplied peer");
+        Some(Peer::new(stream, network))
+    } else {
+        let mut found_peer: Option<Peer> = None;
+        for addr in seeds.iter() {
+            match TcpStream::connect(addr) {
+                Ok(x) => {
+                    found_peer = Some(Peer::new(x, network));
+                    break;
+                }
+                Err(err) => info!("Couldnt connect to peer {} , err: {}", addr, err),
+            }
+        }
+        found_peer
+    }
+    .expect("No connections to peers found");
+
     let mut headers_store = HeaderStore::new(network);
     let mut filter_headers_store = FilterHeaderStore::new(network);
     let extended_pubkeys = args
-        .get(1)
+        .get(0)
         .expect("enter comma separated (x/y/z)pubs")
         .split(",")
         .map(FromStr::from_str)
@@ -114,11 +180,13 @@ fn main() {
     let mut coins = Coins::new();
     let mut filters_height = 0;
 
+    info!("Initiating connection {:#?}", peer.addr);
     // initiate the connection
     peer.send_version();
 
     loop {
-        match peer.read() {
+        let peer_msg = peer.read();
+        match peer_msg {
             NetworkMessage::Version(_) => {
                 // once https://github.com/bitcoin/bitcoin/pull/19070 merged
                 // assert!(version.services.has(ServiceFlags::COMPACT_FILTERS));
