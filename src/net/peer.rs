@@ -149,6 +149,14 @@ impl Peer {
         }
         match &message {
             NetworkMessage::Version(version) => {
+                let required_services =
+                    ServiceFlags::WITNESS | ServiceFlags::NETWORK | ServiceFlags::COMPACT_FILTERS;
+
+                assert!(
+                    version.services.has(required_services),
+                    "peer doesn't support required services"
+                );
+
                 let mut state = self.state.lock().unwrap();
                 if state.handshake_state != HandshakeState::WaitingForVersion {
                     // TODO: disconnect
