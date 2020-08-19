@@ -335,7 +335,7 @@ impl P2P {
                 // TODO: clean this logic up
 
                 // must process blocks in order, could be received out of order from different peers
-                for height in self.blocks_to_process.keys().cloned().collect::<Vec<_>>() {
+                for height in self.blocks_to_process.keys().copied().collect::<Vec<_>>() {
                     if self.blocks_to_process[&height].is_some() {
                         let block = self.blocks_to_process.remove(&height).unwrap().unwrap();
 

@@ -241,7 +241,18 @@ impl Peer {
                         }
                         encode::Error::Io(err) if err.kind() == ErrorKind::UnexpectedEof => {
                             // read more
-                            r.read_buf(&mut read_buf).await.unwrap();
+                            match r.read_buf(&mut read_buf).await {
+                                Ok(n) => {
+                                    if n == 0 {
+                                        // finished cleanly
+                                        break;
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("read error: {}", err);
+                                    break;
+                                }
+                            }
                         }
                         _ => {
                             error!("message handling error");
@@ -272,7 +283,10 @@ impl Peer {
             trace!("outgoing finished");
         };
 
-        tokio::join!(incoming, outgoing);
+        tokio::select! {
+            _ = incoming => {},
+            _ = outgoing => {}
+        }
 
         trace!("peer finished");
     }
