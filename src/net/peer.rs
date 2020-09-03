@@ -3,8 +3,8 @@ use bitcoin::{
     network::{
         constants::ServiceFlags,
         message::{NetworkMessage, RawNetworkMessage},
-        message_blockdata::GetHeadersMessage,
-        message_filter::GetCFHeaders,
+        message_blockdata::{GetHeadersMessage, Inventory},
+        message_filter::{GetCFHeaders, GetCFilters},
         message_network::VersionMessage,
         Address,
     },
@@ -57,6 +57,7 @@ pub struct Peer {
     connection_type: ConnectionType,
     network: Network,
     state: Mutex<State>,
+    required_services: ServiceFlags,
 }
 
 #[derive(Default)]
@@ -70,6 +71,7 @@ impl Peer {
         stream: TcpStream,
         network: Network,
         connection_type: ConnectionType,
+        required_services: ServiceFlags,
     ) -> (Arc<Self>, JoinHandle<()>) {
         stream.set_nodelay(true).unwrap();
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
@@ -79,6 +81,7 @@ impl Peer {
             connection_type,
             network,
             state: Mutex::new(State::default()),
+            required_services,
         });
         let peer2 = Arc::clone(&peer);
         let jh = tokio::spawn(peer2.run(stream, outgoing_rx, incoming_tx));
@@ -87,6 +90,19 @@ impl Peer {
 
     pub fn send(&self, message: NetworkMessage) {
         self.outgoing_tx.send((message, None)).unwrap();
+    }
+
+    pub fn get_block(&self, hash: BlockHash) {
+        // we don't get the witness block because we can't verify signatures anyway
+        self.send(NetworkMessage::GetData(vec![Inventory::Block(hash)]));
+    }
+
+    pub fn get_filters(&self, start_height: u32, stop_hash: BlockHash) {
+        self.send(NetworkMessage::GetCFilters(GetCFilters {
+            filter_type: 0,
+            start_height,
+            stop_hash,
+        }));
     }
 
     pub async fn send_and_wait(&self, message: NetworkMessage) {
@@ -116,7 +132,7 @@ impl Peer {
         self.send(NetworkMessage::Version(version));
     }
 
-    pub fn send_get_headers(&self, locator_hashes: Vec<BlockHash>, stop_hash: Option<BlockHash>) {
+    pub fn get_headers(&self, locator_hashes: Vec<BlockHash>, stop_hash: Option<BlockHash>) {
         self.send(NetworkMessage::GetHeaders(GetHeadersMessage::new(
             locator_hashes,
             stop_hash.unwrap_or_default(),
@@ -149,11 +165,8 @@ impl Peer {
         }
         match &message {
             NetworkMessage::Version(version) => {
-                let required_services =
-                    ServiceFlags::WITNESS | ServiceFlags::NETWORK | ServiceFlags::COMPACT_FILTERS;
-
                 assert!(
-                    version.services.has(required_services),
+                    version.services.has(self.required_services),
                     "peer doesn't support required services"
                 );
 
@@ -316,8 +329,20 @@ mod test {
 
         let (stream1, _) = jh.await.unwrap();
 
-        let (peer1, _) = Peer::new(tx1, stream1, Network::Regtest, ConnectionType::Inbound);
-        let (peer2, _) = Peer::new(tx2, stream2, Network::Regtest, ConnectionType::Outbound);
+        let (peer1, _) = Peer::new(
+            tx1,
+            stream1,
+            Network::Regtest,
+            ConnectionType::Inbound,
+            ServiceFlags::NONE,
+        );
+        let (peer2, _) = Peer::new(
+            tx2,
+            stream2,
+            Network::Regtest,
+            ConnectionType::Outbound,
+            ServiceFlags::NONE,
+        );
 
         assert_eq!(rx1.recv().await.unwrap().cmd(), "version");
         assert_eq!(rx2.recv().await.unwrap().cmd(), "version");

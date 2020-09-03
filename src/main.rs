@@ -1,4 +1,4 @@
-use bitcoin::Network;
+use bitcoin::{network::constants::ServiceFlags, Network};
 use cfwallet::{net::*, wallet::create_master_account};
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use tokio::{
@@ -39,7 +39,13 @@ async fn main() {
         for addr in addrs {
             let stream = TcpStream::connect(addr).await.unwrap();
             let (tx, mut rx) = mpsc::channel(1);
-            let (peer, jh) = Peer::new(tx, stream, network, ConnectionType::Outbound);
+            let (peer, jh) = Peer::new(
+                tx,
+                stream,
+                network,
+                ConnectionType::Outbound,
+                ServiceFlags::WITNESS | ServiceFlags::COMPACT_FILTERS | ServiceFlags::NETWORK,
+            );
             handles.push(jh);
             {
                 let peer = Arc::clone(&peer);

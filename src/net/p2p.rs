@@ -70,7 +70,7 @@ pub struct P2P {
 
 pub async fn maintain_peers(p2p: Arc<AsyncMutex<P2P>>) {
     let network = p2p.lock().await.network;
-    let seeds = dns_seeds(network).await;
+    let seeds = dns_seeds(network, None).await;
     let mut p2p = p2p.lock().await;
     for addr in seeds {
         p2p.address_manager.add(addr, ServiceFlags::NONE);
@@ -99,23 +99,17 @@ impl P2P {
 
     /// get a block from a random blocks only peer
     pub async fn get_block(&mut self, hash: BlockHash) {
-        let mut peers: Vec<PeerRef> = self
-            .block_peers
-            .values()
-            .map(|peer| Arc::clone(peer))
-            .collect();
-
-        peers.shuffle(&mut thread_rng());
-
-        if let Some(peer) = peers.first() {
-            let height = self.header_store.by_hash(&hash).unwrap().height;
-            self.blocks_to_process.insert(height, None);
-
-            peer.send_and_wait(NetworkMessage::GetData(vec![Inventory::WitnessBlock(hash)]))
-                .await;
-        } else {
+        if self.block_peers.is_empty() {
             todo!("no useful peers");
         }
+
+        let peer_pos: usize = thread_rng().gen_range(0, self.block_peers.len());
+        let peer = self.block_peers.values().skip(peer_pos).next().unwrap();
+
+        let height = self.header_store.by_hash(&hash).unwrap().height;
+        self.blocks_to_process.insert(height, None);
+
+        peer.get_block(hash);
     }
 
     pub fn get_filter_headers(&mut self) {
@@ -191,11 +185,7 @@ impl P2P {
 
                 let stop_hash = self.header_store.by_height(stop_height).unwrap().hash;
 
-                peer.send(NetworkMessage::GetCFilters(GetCFilters {
-                    filter_type: 0,
-                    start_height,
-                    stop_hash,
-                }));
+                peer.get_filters(start_height, stop_hash);
 
                 *self.fetching_filters.entry(peer.addr).or_default() +=
                     (stop_height - start_height) as usize + 1;
@@ -217,7 +207,7 @@ impl P2P {
         let tip = self.header_store.tip;
         let start = self.header_store.by_hash(tip.prev()).map(|h| h.hash);
         let locator = self.header_store.locator(start);
-        peer.send_get_headers(locator, None);
+        peer.get_headers(locator, None);
     }
 
     pub async fn handle_message(&mut self, peer: &PeerRef, message: NetworkMessage) {
@@ -249,7 +239,7 @@ impl P2P {
 
                 if headers.len() == 2000 {
                     let last_hash = headers[headers.len() - 1].block_hash();
-                    peer.send_get_headers(vec![last_hash], None);
+                    peer.get_headers(vec![last_hash], None);
                 }
 
                 // fetch new filter headers from peers
